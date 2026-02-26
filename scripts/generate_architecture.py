@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate an interactive Mermaid architecture diagram for README.md.
+Generate an interactive architecture diagram for README.md and GitHub Pages.
 
 Two modes of operation:
   1. **rad app graph** (primary) — reads structured output from `rad app graph`
@@ -9,14 +9,19 @@ Two modes of operation:
   2. **Direct Bicep parsing** (fallback) — regex-parses app.bicep directly.
      Used locally or when `rad app graph` is not yet available.
 
-The generated Mermaid diagram uses GitHub's visual style (white background,
-rounded-corner nodes, green/amber borders) and has clickable nodes that open
-the corresponding line in app.bicep on GitHub.
+Outputs:
+  - graph.svg          — static SVG overview (repo root + docs/) with <title>
+                         tooltips and <a href> links to the interactive explorer
+  - docs/graph-data.json — JSON data for the Cytoscape.js interactive explorer
+  - README.md          — updated Architecture section with clickable SVG image
+                         that links to the GitHub Pages interactive explorer
 """
 
 import json
+import math
 import re
 import os
+import subprocess
 import sys
 
 
@@ -397,23 +402,54 @@ def parse_rad_graph_output(output_path):
     return resources, connections, bicep_filename
 
 
+def get_line_blame(file_path: str, line: int) -> dict:
+    """Run `git blame` for a single line and return commit hash + author.
+
+    Returns {"hash": "abc1234", "author": "Jane Doe"} or empty dict on failure.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "blame", "-L", f"{line},{line}", "--porcelain", "--", file_path],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return {}
+        lines = result.stdout.splitlines()
+        info: dict = {}
+        if lines:
+            # First line: <full-hash> <orig-line> <final-line> <num-lines>
+            info["hash"] = lines[0].split()[0][:7]  # short hash
+        for ln in lines:
+            if ln.startswith("author "):
+                info["author"] = ln[len("author "):]
+                break
+        return info
+    except Exception:
+        return {}
+
+
 def get_github_file_url(repo_owner, repo_name, branch, file_path, line):
     """Build a GitHub URL that highlights a specific line."""
     return f"https://github.com/{repo_owner}/{repo_name}/blob/{branch}/{file_path}#L{line}"
 
 
+def get_pages_url(repo_owner, repo_name):
+    """Build the GitHub Pages base URL."""
+    return f"https://{repo_owner}.github.io/{repo_name}/"
+
+
+# ── Mermaid generation (for README) ──────────────────────────────
+
 def generate_mermaid(resources, connections, repo_owner, repo_name, branch, bicep_file,
                      detailed=False, bicep_path=None):
     """Generate a Mermaid diagram string with clickable nodes and GitHub-like styling.
 
-    When detailed=True, container nodes show image:tag metadata.
+    Mermaid `click ... href` directives create working links when GitHub renders
+    the diagram. Each node clicks through to the resource definition in app.bicep.
     """
-
     lines = ["graph LR"]
 
-    # --- GitHub light theme styling ---
-    # Matches GitHub's own dependency/action graph look:
-    # white background, light gray borders, clean rounded-corner boxes
+    # GitHub light theme styling
     lines.insert(0, "%%{ init: { 'theme': 'base', 'themeVariables': { "
                      "'primaryColor': '#ffffff', "
                      "'primaryTextColor': '#1f2328', "
@@ -430,36 +466,32 @@ def generate_mermaid(resources, connections, repo_owner, repo_name, branch, bice
                      "'fontFamily': '-apple-system, BlinkMacSystemFont, Segoe UI, Noto Sans, Helvetica, Arial, sans-serif'"
                      " } } }%%")
 
-    # Class definitions — GitHub light palette with rounded corners
-    # Container: blue accent (like GitHub's blue links/actions)
+    # Class definitions
     lines.append("    classDef container fill:#ffffff,stroke:#2da44e,stroke-width:1.5px,color:#1f2328,rx:6,ry:6")
-    # Datastore: orange accent (like GitHub's warning/merge colors)
     lines.append("    classDef datastore fill:#ffffff,stroke:#d4a72c,stroke-width:1.5px,color:#1f2328,rx:6,ry:6")
-    # Other: neutral gray
     lines.append("    classDef other fill:#ffffff,stroke:#d1d9e0,stroke-width:1.5px,color:#1f2328,rx:6,ry:6")
 
     resource_map = {r["symbolic_name"]: r for r in resources}
 
-    # Add nodes (skip the top-level application resource)
-    # Use regular box nodes [" "] — rounded corners come from rx/ry in classDef
+    # Nodes
     for res in resources:
         if res["category"] == "application":
             continue
 
         if detailed:
-            label = make_detailed_label(res, bicep_path)
-        else:
-            # Standard label — clean, no line numbers (those go in tooltip only)
             label_parts = ["<b>" + res["display_name"] + "</b>"]
-            if res["image"]:
-                label_parts.append(res["image"])
-            if res["port"]:
-                label_parts.append(":" + res["port"])
+            img_result = resolve_image_tag(res, bicep_path)
+            if img_result:
+                image, tag = img_result
+                label_parts.append(f"{image}:{tag}")
+            label = "<br/>".join(label_parts)
+        else:
+            label_parts = ["<b>" + res["display_name"] + "</b>"]
             label = "<br/>".join(label_parts)
 
         lines.append('    {}["{}"]:::{}'.format(res["symbolic_name"], label, res["category"]))
 
-    # Add edges — clean arrow style
+    # Edges
     for conn in connections:
         if conn["from"] in resource_map and conn["to"] in resource_map:
             from_res = resource_map[conn["from"]]
@@ -468,17 +500,16 @@ def generate_mermaid(resources, connections, repo_owner, repo_name, branch, bice
                 continue
             lines.append("    {} --> {}".format(conn["from"], conn["to"]))
 
-    # Add click directives — tooltip shows source file:line, click opens GitHub
+    # Click directives — each node links to source file on GitHub
     for res in resources:
         if res["category"] == "application":
             continue
-        # Use per-resource source_file if available, otherwise fall back to bicep_file
         res_file = res.get("source_file") or bicep_file
         url = get_github_file_url(repo_owner, repo_name, branch, res_file, res["line_number"])
-        tooltip = "{}:{}" .format(res_file, res["line_number"])
+        tooltip = "{}:{}".format(res_file, res["line_number"])
         lines.append('    click {} href "{}" "{}" _blank'.format(res["symbolic_name"], url, tooltip))
 
-    # Link style — GitHub gray, clean
+    # Link styles
     edge_count = 0
     for conn in connections:
         if conn["from"] in resource_map and conn["to"] in resource_map:
@@ -492,19 +523,290 @@ def generate_mermaid(resources, connections, repo_owner, repo_name, branch, bice
     return "\n".join(lines)
 
 
-def update_readme(readme_path, mermaid_block):
-    """Update the Architecture section in README.md with the Mermaid diagram."""
+# ── SVG generation ────────────────────────────────────────────────
+
+# Layout constants
+SVG_NODE_WIDTH = 160
+SVG_NODE_HEIGHT = 50
+SVG_NODE_HEIGHT_DETAILED = 70
+SVG_H_GAP = 80
+SVG_V_GAP = 40
+SVG_PADDING = 30
+SVG_FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif"
+
+
+def _escape_xml(text: str) -> str:
+    """Escape text for safe inclusion in XML/SVG."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").replace("'", "&apos;")
+
+
+def _layout_nodes(resources, detailed=False):
+    """Simple left-to-right layout: group by category column order.
+
+    Returns dict: symbolic_name -> (x, y, w, h)
+    """
+    node_h = SVG_NODE_HEIGHT_DETAILED if detailed else SVG_NODE_HEIGHT
+
+    # Order: containers first, then datastores, then others
+    columns: dict[str, list] = {"container": [], "datastore": [], "other": []}
+    for r in resources:
+        if r["category"] == "application":
+            continue
+        cat = r["category"] if r["category"] in columns else "other"
+        columns[cat].append(r)
+
+    positions = {}
+    x_offset = SVG_PADDING
+    for col_key in ("container", "datastore", "other"):
+        col = columns[col_key]
+        if not col:
+            continue
+        y_offset = SVG_PADDING
+        for r in col:
+            positions[r["symbolic_name"]] = (x_offset, y_offset, SVG_NODE_WIDTH, node_h)
+            y_offset += node_h + SVG_V_GAP
+        x_offset += SVG_NODE_WIDTH + SVG_H_GAP
+
+    return positions
+
+
+def _build_edge_path(x1, y1, w1, h1, x2, y2, w2, h2):
+    """Build an SVG path for an edge between two node boxes."""
+    # Source: right center of node 1
+    sx = x1 + w1
+    sy = y1 + h1 / 2
+    # Target: left center of node 2
+    tx = x2
+    ty = y2 + h2 / 2
+
+    # If target is to the left of source, go from bottom to top instead
+    if tx <= sx:
+        sx = x1 + w1 / 2
+        sy = y1 + h1
+        tx = x2 + w2 / 2
+        ty = y2
+
+    # Simple bezier curve
+    mx = (sx + tx) / 2
+    return f"M {sx},{sy} C {mx},{sy} {mx},{ty} {tx},{ty}"
+
+
+def generate_svg(resources, connections, repo_owner, repo_name, branch, bicep_file,
+                 detailed=False, bicep_path=None):
+    """Generate an SVG string with tooltips and clickable nodes."""
+    positions = _layout_nodes(resources, detailed)
+    resource_map = {r["symbolic_name"]: r for r in resources}
+    pages_url = get_pages_url(repo_owner, repo_name)
+    node_h = SVG_NODE_HEIGHT_DETAILED if detailed else SVG_NODE_HEIGHT
+
+    # Calculate SVG dimensions (extra 30px at bottom for footer link)
+    footer_height = 30
+    if not positions:
+        svg_w, svg_h = 200, 100 + footer_height
+    else:
+        max_x = max(x + w for x, y, w, h in positions.values()) + SVG_PADDING
+        max_y = max(y + h for x, y, w, h in positions.values()) + SVG_PADDING
+        svg_w = int(max_x)
+        svg_h = int(max_y) + footer_height
+
+    parts = []
+    parts.append(f'<svg xmlns="http://www.w3.org/2000/svg" '
+                 f'xmlns:xlink="http://www.w3.org/1999/xlink" '
+                 f'width="{svg_w}" height="{svg_h}" '
+                 f'viewBox="0 0 {svg_w} {svg_h}">')
+
+    # Defs: arrowhead marker
+    parts.append('  <defs>')
+    parts.append('    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" '
+                 'markerWidth="6" markerHeight="6" orient="auto-start-reverse">')
+    parts.append('      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2da44e" />')
+    parts.append('    </marker>')
+    parts.append('  </defs>')
+
+    # Background
+    parts.append(f'  <rect width="{svg_w}" height="{svg_h}" fill="#ffffff" />')
+
+    # Edges
+    for conn in connections:
+        fr = conn["from"]
+        to = conn["to"]
+        if fr not in positions or to not in positions:
+            continue
+        if resource_map.get(fr, {}).get("category") == "application":
+            continue
+        if resource_map.get(to, {}).get("category") == "application":
+            continue
+        x1, y1, w1, h1 = positions[fr]
+        x2, y2, w2, h2 = positions[to]
+        path_d = _build_edge_path(x1, y1, w1, h1, x2, y2, w2, h2)
+        parts.append(f'  <path d="{path_d}" fill="none" stroke="#2da44e" '
+                     f'stroke-width="1.5" marker-end="url(#arrow)" />')
+
+    # Nodes
+    for res in resources:
+        if res["category"] == "application":
+            continue
+        if res["symbolic_name"] not in positions:
+            continue
+
+        x, y, w, h = positions[res["symbolic_name"]]
+        name = res["display_name"]
+        res_type = res["resource_type"]
+        res_file = res.get("source_file") or bicep_file
+        line = res["line_number"]
+
+        # Border color by category
+        stroke = "#2da44e" if res["category"] == "container" else (
+            "#d4a72c" if res["category"] == "datastore" else "#d1d9e0")
+
+        # Always resolve image:tag for tooltip (not just detailed mode)
+        img_result = resolve_image_tag(res, bicep_path)
+
+        # Tooltip: show image:tag on hover (falls back to type if no image)
+        if img_result:
+            image, tag = img_result
+            tooltip = f"{name} — {image}:{tag}"
+        else:
+            tooltip = f"{name} — {res_type}"
+
+        # Link to source file definition on GitHub
+        source_url = get_github_file_url(repo_owner, repo_name, branch, res_file, line)
+        href = source_url
+
+        parts.append(f'  <a href="{_escape_xml(href)}" target="_blank">')
+        parts.append(f'    <rect x="{x}" y="{y}" width="{w}" height="{h}" '
+                     f'rx="6" ry="6" fill="#ffffff" stroke="{stroke}" stroke-width="1.5" />')
+
+        if detailed:
+            # Resource name — primary label
+            parts.append(f'    <text x="{x + w / 2}" y="{y + 22}" text-anchor="middle" '
+                         f'fill="#1f2328" font-size="13" font-weight="600" '
+                         f'font-family="{SVG_FONT}">{_escape_xml(name)}</text>')
+            if img_result:
+                img_label = f"{image}:{tag}"
+                # Truncate long image strings
+                if len(img_label) > 28:
+                    img_label = img_label[:25] + "..."
+                parts.append(f'    <text x="{x + w / 2}" y="{y + 42}" text-anchor="middle" '
+                             f'fill="#656d76" font-size="10" '
+                             f'font-family="{SVG_FONT}">{_escape_xml(img_label)}</text>')
+        else:
+            # Standard label — centered in box
+            parts.append(f'    <text x="{x + w / 2}" y="{y + h / 2 + 5}" text-anchor="middle" '
+                         f'fill="#1f2328" font-size="13" font-weight="600" '
+                         f'font-family="{SVG_FONT}">{_escape_xml(name)}</text>')
+
+        parts.append(f'    <title>{_escape_xml(tooltip)}</title>')
+        parts.append('  </a>')
+
+    # Footer: "Interactive Graph →" link to GitHub Pages explorer
+    footer_y = svg_h - 10
+    footer_x = svg_w / 2
+    parts.append(f'  <a href="{_escape_xml(pages_url)}" target="_blank">')
+    parts.append(f'    <text x="{footer_x}" y="{footer_y}" text-anchor="middle" '
+                 f'fill="#0969da" font-size="12" '
+                 f'font-family="{SVG_FONT}" text-decoration="underline" '
+                 f'style="cursor:pointer">'
+                 f'Interactive Graph \u2192</text>')
+    parts.append('  </a>')
+
+    parts.append('</svg>')
+    return "\n".join(parts)
+
+
+# ── JSON data export ──────────────────────────────────────────────
+
+def generate_graph_json(resources, connections, repo_owner, repo_name, branch, bicep_file,
+                        detailed=False, bicep_path=None):
+    """Generate a JSON object for the Cytoscape.js interactive explorer."""
+    nodes = []
+    edges = []
+    resource_map = {r["symbolic_name"]: r for r in resources}
+
+    for res in resources:
+        if res["category"] == "application":
+            continue
+        res_file = res.get("source_file") or bicep_file
+        node_data = {
+            "id": res["symbolic_name"],
+            "label": res["display_name"],
+            "type": res["resource_type"],
+            "category": res["category"],
+            "sourceFile": res_file,
+            "line": res["line_number"],
+            "sourceUrl": get_github_file_url(repo_owner, repo_name, branch, res_file, res["line_number"]),
+        }
+        # Always include image:tag when available (containers)
+        img_result = resolve_image_tag(res, bicep_path)
+        if img_result:
+            node_data["image"] = img_result[0]
+            node_data["tag"] = img_result[1]
+
+        # Git blame: last commit hash + author for this resource's line
+        blame = get_line_blame(res.get("source_file") or bicep_file, res["line_number"])
+        if blame.get("hash"):
+            node_data["commitHash"] = blame["hash"]
+        if blame.get("author"):
+            node_data["commitAuthor"] = blame["author"]
+
+        # Gather connections for this node
+        outbound = [c["to"] for c in connections
+                    if c["from"] == res["symbolic_name"]
+                    and c["to"] in resource_map
+                    and resource_map[c["to"]].get("category") != "application"]
+        if outbound:
+            node_data["connections"] = outbound
+
+        nodes.append({"data": node_data})
+
+    for conn in connections:
+        fr = conn["from"]
+        to = conn["to"]
+        if fr not in resource_map or to not in resource_map:
+            continue
+        if resource_map[fr].get("category") == "application" or resource_map[to].get("category") == "application":
+            continue
+        edges.append({
+            "data": {
+                "id": f"{fr}->{to}",
+                "source": fr,
+                "target": to,
+            }
+        })
+
+    return {
+        "elements": {
+            "nodes": nodes,
+            "edges": edges,
+        },
+        "metadata": {
+            "repoOwner": repo_owner,
+            "repoName": repo_name,
+            "branch": branch,
+            "bicepFile": bicep_file,
+            "detailed": detailed,
+        },
+    }
+
+
+# ── README update ─────────────────────────────────────────────────
+
+def update_readme(readme_path, mermaid_block, repo_owner, repo_name):
+    """Update the Architecture section in README.md with Mermaid diagram + Pages link."""
     with open(readme_path, "r") as f:
         content = f.read()
 
-    # Build the new Architecture section body
+    pages_url = get_pages_url(repo_owner, repo_name)
+
     new_body = "\n".join([
         "",
-        "> *Auto-generated from `app.bicep` \u2014 click any node to jump to its definition in the source.*",
+        "> *Auto-generated from `app.bicep` — click any node to jump to its definition in the source.*",
         "",
         "```mermaid",
         mermaid_block,
         "```",
+        "",
+        f"[Interactive Graph \u2192]({pages_url})",
         "",
     ])
 
@@ -533,10 +835,11 @@ def main():
     bicep_file = "app.bicep"
     bicep_path = os.path.join(repo_root, bicep_file)
     readme_path = os.path.join(repo_root, "README.md")
+    docs_dir = os.path.join(repo_root, "docs")
 
     # Repository info for building GitHub URLs for clickable nodes
     repo_owner = os.environ.get("REPO_OWNER", "nithyatsu")
-    repo_name = os.environ.get("REPO_NAME", "prototype")
+    repo_name = os.environ.get("REPO_NAME", "prototype3")
     branch = os.environ.get("REPO_BRANCH", "main")
 
     detailed = is_detailed_mode()
@@ -571,6 +874,7 @@ def main():
     for c in connections:
         print("  - {} -> {}".format(c["from"], c["to"]))
 
+    # --- Generate Mermaid diagram for README ---
     print("\nGenerating Mermaid diagram...")
     mermaid_block = generate_mermaid(
         resources, connections,
@@ -579,11 +883,44 @@ def main():
         bicep_path=bicep_path,
     )
 
-    print("\nMermaid output:")
-    print(mermaid_block)
+    # --- Generate SVG ---
+    print("\nGenerating SVG diagram...")
+    svg_content = generate_svg(
+        resources, connections,
+        repo_owner, repo_name, branch, bicep_file,
+        detailed=detailed,
+        bicep_path=bicep_path,
+    )
 
+    # Write SVG to repo root (for README) and docs/ (for Pages)
+    svg_root_path = os.path.join(repo_root, "graph.svg")
+    with open(svg_root_path, "w") as f:
+        f.write(svg_content)
+    print(f"SVG written to {svg_root_path}")
+
+    os.makedirs(docs_dir, exist_ok=True)
+    svg_docs_path = os.path.join(docs_dir, "graph.svg")
+    with open(svg_docs_path, "w") as f:
+        f.write(svg_content)
+    print(f"SVG written to {svg_docs_path}")
+
+    # --- Generate JSON for Cytoscape.js explorer ---
+    print("\nGenerating JSON data for interactive explorer...")
+    graph_data = generate_graph_json(
+        resources, connections,
+        repo_owner, repo_name, branch, bicep_file,
+        detailed=detailed,
+        bicep_path=bicep_path,
+    )
+
+    json_path = os.path.join(docs_dir, "graph-data.json")
+    with open(json_path, "w") as f:
+        json.dump(graph_data, f, indent=2)
+    print(f"JSON written to {json_path}")
+
+    # --- Update README ---
     print("\nUpdating README...")
-    update_readme(readme_path, mermaid_block)
+    update_readme(readme_path, mermaid_block, repo_owner, repo_name)
 
     print("Done!")
 

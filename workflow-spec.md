@@ -42,46 +42,164 @@ Run `rad app graph <fully-qualified-path-to-app.bicep>`.
 
 ### 5. Build a visual graph from the output
 
-Parse the output from step 4 and construct a renderable graph (e.g., using Graphviz or Mermaid). Extract:
+Parse the output from step 4 and construct a renderable graph. Extract:
 
 - **Nodes** — each resource (name, type, source file, line number)
 - **Edges** — connections between resources
 
-### 6. Render the graph and update the README
+### 6. Render the graph — Mermaid + SVG + Interactive explorer
 
-Generate a **Mermaid diagram** and embed it directly in the `README.md` Architecture section as a fenced `mermaid` code block. GitHub renders Mermaid natively, so the diagram is interactive right in the README — no separate image files or HTML pages needed.
+The architecture visualization uses a **three-tier approach**:
 
-#### Format
+1. **README Mermaid diagram** — A Mermaid `graph LR` diagram embedded directly in `README.md`. GitHub renders Mermaid natively. Mermaid `click ... href` directives create **working clickable nodes** that open the resource definition in `app.bicep` on GitHub. A footer link leads to the interactive explorer.
+2. **SVG overview** — A static SVG generated for the GitHub Pages explorer and for direct viewing in the repo (`graph.svg`). SVG nodes have `<title>` tooltips (image:tag) and `<a href>` links to source definitions. Includes a footer link to the interactive explorer.
+3. **GitHub Pages interactive explorer** — A fully interactive Cytoscape.js web page with click-to-expand detail panels, zoom, pan, and drill-down.
 
-Use a Mermaid `graph LR` with:
-- `%%{ init }%%` directive for theme configuration
-- `classDef` for node styling
-- `click` directives for making each node a hyperlink with tooltip
+#### Why Mermaid for README (not SVG)
+
+GitHub renders SVGs referenced in Markdown as `<img>` tags. This preserves the **Markdown image-title tooltip** — e.g. `![Architecture](graph.svg "working")` shows `"working"` on hover over the whole image — but **strips per-node interactivity** inside the SVG (`<title>` tooltips per element, `<a href>` links, and click handlers do not fire). Mermaid `click ... href` directives **do** create working hyperlinks when GitHub renders the diagram, giving us **per-node click-to-source** in the README.
+
+The SVG is still generated for:
+- The GitHub Pages explorer (displayed alongside the graph data)
+- Direct viewing when navigating to `graph.svg` in the repo (where per-node `<title>` and `<a>` do work)
+
+#### Deployment model
+
+Generated assets are **not committed** to the repo — they are assembled at runtime and deployed as a GitHub Pages artifact. This keeps the repo clean for end users.
+
+```
+.github/pages/
+└── index.html          ← Static template (checked in, hidden from casual browsing)
+
+# Generated at CI runtime (never committed, .gitignore'd):
+docs/
+├── graph-data.json     ← Auto-generated JSON for Cytoscape.js explorer
+└── graph.svg           ← Auto-generated SVG overview
+
+_site/                  ← Assembled deploy directory (CI only)
+├── index.html          ← Copied from .github/pages/
+├── graph-data.json     ← Copied from docs/
+└── graph.svg           ← Copied from docs/
+```
+
+- The CI workflow generates `docs/graph-data.json` and `docs/graph.svg` from the `rad app graph` output.
+- `graph.svg` is also committed to the repo root so the README can reference it.
+- A `_site/` directory is assembled from `.github/pages/index.html` + generated files, then uploaded via `actions/upload-pages-artifact`.
+- **GitHub Pages** is enabled via `actions/configure-pages@v5` with `enablement: true` and deployed via `actions/deploy-pages@v4`.
+- `docs/` and `_site/` are in `.gitignore` — users of the repo never see generated artifacts.
+- No build step is required — `index.html` is a static file that loads Cytoscape.js from a CDN.
+
+#### Graph library (interactive explorer)
+
+Use **[Cytoscape.js](https://js.cytoscape.org/)** for the GitHub Pages interactive explorer:
+- Purpose-built for graph/network visualization
+- Accepts JSON data directly (`{ nodes: [...], edges: [...] }`) — maps naturally to `app-graph.json`
+- Single HTML file + CDN (~300KB) — no `npm install` or build pipeline
+- Built-in layout algorithms (`dagre` for directed graphs), zoom, and pan
 
 #### Visual style
 
+The same visual style applies to both the Mermaid diagram, SVG overview, and the Cytoscape.js explorer:
+
 | Property        | Value                                          |
 |-----------------|-------------------------------------------------|
-| Theme           | `base` (light)                                 |
 | Background      | White (`#ffffff`)                               |
 | Font color      | Dark (`#1f2328`)                               |
-| Node shape      | Rounded-corner rectangles (`rx:6, ry:6`)        |
+| Node shape      | Rounded-corner rectangles (`rx:6, ry:6` in classDef/SVG; `shape: 'roundrectangle'` in Cytoscape) |
 | Container border| Green (`#2da44e`)                               |
 | Datastore border| Amber (`#d4a72c`)                               |
 | Node fill       | White (`#ffffff`)                               |
 | Edge color      | Green (`#2da44e`)                               |
 | Font            | `-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif` |
 
-#### Interactivity (via Mermaid `click` directive)
+#### README Mermaid diagram — Interactivity
 
-| Feature         | Behavior                                        |
-|-----------------|-------------------------------------------------|
-| **Tooltip**     | Hovering a node shows: `"<name> — app.bicep line <N>"` |
-| **Click**       | Clicking a node opens `https://github.com/<owner>/<repo>/blob/<branch>/app.bicep#L<N>` with the line highlighted |
+The Mermaid diagram in README uses `click` directives to make every node a hyperlink:
+
+```mermaid
+click frontend href "https://github.com/<owner>/<repo>/blob/<branch>/app.bicep#L<N>" "app.bicep:<N>" _blank
+```
+
+| Feature              | Behavior                                        |
+|----------------------|-------------------------------------------------|
+| **Click node**       | Opens the **source file definition on GitHub** at the resource's line number (`app.bicep#L<N>`). This works because GitHub preserves Mermaid `click href` directives as real hyperlinks. |
+| **Footer link**      | Below the diagram, an **"Interactive Graph →"** link opens the GitHub Pages explorer for full interactivity. |
+
+#### SVG overview — Interactivity (direct file viewing)
+
+When viewing `graph.svg` directly in the repo (not via README), individual nodes have:
+- `<title>` tooltips showing **image:tag** for containers (or resource type for others)
+- `<a href>` links to the **source file definition** on GitHub (`app.bicep#L<N>`)
+- A footer link labeled **"Interactive Graph →"** that opens the GitHub Pages explorer
+
+#### GitHub Pages Explorer — Interactivity
+
+The Cytoscape.js interactive explorer is styled as a **floating popup card** — a centered modal-like container with a dimmed backdrop, rounded corners, drop shadow, and a subtle entrance animation. This prevents the page from feeling like a redirect to a separate app.
+
+| Feature              | Behavior                                        |
+|----------------------|-------------------------------------------------|
+| **Popup card UI**    | The explorer is contained in a `960×700px` max card with a title bar ("Architecture Explorer"), Fit button, and a "Repo" link back to the GitHub repository. The page background is a semi-transparent dark overlay. |
+| **Tooltip on hover** | Hovering a node shows a rich floating tooltip (`<div>` overlay positioned near the cursor) with: **resource name**, **image:tag** (for containers) or **resource type** (for others), **last commit short hash**, and **commit author**. Data comes from `git blame` run at generation time. Implemented via Cytoscape `mouseover`/`mouseout` events. |
+| **Click to expand**  | Clicking a node opens an **inline detail panel** (slide-in sidebar) showing extended resource information. This is the core interactive feature that cannot work in README. |
+| **Auto-focus from README** | The page reads the `?node=<name>` query parameter from the URL. If present, the page auto-selects that node, centers the viewport on it, and opens its detail panel immediately. This creates a seamless flow from README click → interactive exploration. |
+| **Click to navigate**| The detail panel includes a **"View source"** link that opens the resource definition on GitHub (`https://github.com/<owner>/<repo>/blob/<branch>/app.bicep#L<N>`) with the line highlighted. |
+| **Zoom & pan**       | Built-in Cytoscape.js zoom (scroll wheel) and pan (click-drag background). A **"Fit"** button in the title bar resets the viewport to show all nodes. |
+| **Layout**           | Use the `dagre` layout (hierarchical left-to-right) for directed acyclic graphs. The layout runs automatically on load. |
+| **Responsive**       | On smaller screens (<700px), the card fills the viewport and the detail panel stacks vertically below the graph. |
+
+#### Detail panel contents
+
+When a user clicks a node (or arrives via `?node=` from README), the detail panel displays:
+
+| Field              | Value                                           |
+|--------------------|-------------------------------------------------|
+| **Resource name**  | e.g., `frontend`                                |
+| **Resource type**  | e.g., `Applications.Core/containers`            |
+| **Source**         | `app.bicep`, line N (clickable link to GitHub)  |
+| **Connections**    | List of outbound connections (e.g., `→ backend`, `→ database`) |
+| **Image:tag**      | _(detailed mode only)_ e.g., `ghcr.io/image-registry/magpie:latest` |
 
 #### README update
 
-Replace the Architecture section's Mermaid code block with the newly generated one. The diagram should be the only content between the `## Architecture` heading and the next `##` heading.
+The `README.md` Architecture section is updated with a Mermaid diagram and a link to the interactive explorer:
+
+````markdown
+> *Auto-generated from `app.bicep` — click any node to jump to its definition in the source.*
+
+```mermaid
+<generated mermaid block>
+```
+
+[Interactive Graph →](https://<owner>.github.io/<repo>/)
+````
+
+- **No `<div>` wrapper** — wrapping the Mermaid fence in `<div align="center">` causes GitHub to treat it as inline HTML, which **breaks Mermaid rendering**. The block is placed directly under the heading.
+- Clicking any node opens the resource definition in `app.bicep` on GitHub.
+- The **"Interactive Graph →"** footer link opens the GitHub Pages Cytoscape.js explorer.
+- The diagram should be the only content between the `## Architecture` heading and the next `##` heading.
+
+#### GitHub Pages setup
+
+The workflow must ensure GitHub Pages is enabled. Use the official GitHub Pages deployment actions with `enablement: true` to auto-create the Pages site if it doesn't exist:
+
+```yaml
+- name: Assemble Pages site
+  run: |
+    mkdir -p _site
+    cp .github/pages/index.html _site/
+    cp docs/graph-data.json     _site/
+    cp docs/graph.svg           _site/
+
+- uses: actions/configure-pages@v5
+  with:
+    enablement: true
+
+- uses: actions/upload-pages-artifact@v3
+  with:
+    path: _site/
+
+- uses: actions/deploy-pages@v4
+```
 
 ### 7. Detailed mode — Image dependency graph
 
@@ -127,7 +245,9 @@ In detailed mode, the resulting diagram effectively becomes an **image dependenc
 
 ### 8. Commit and push
 
-Auto-commit changes to `docs/` and `README.md` only if the graph has changed.
+Auto-commit changes to `README.md`, `graph.svg`, and `.radius/app-graph.json` only if the graph has changed. Generated Pages assets (`docs/`, `_site/`) are **not committed** — they are deployed directly as a workflow artifact.
+
+Then assemble `_site/` from `.github/pages/index.html` + generated files and deploy to GitHub Pages.
 
 ---
 

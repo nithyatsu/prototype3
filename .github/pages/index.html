@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Architecture Explorer</title>
+  <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+  <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    /* Dimmed backdrop — feels like a modal overlay */
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+      color: #1f2328;
+      background: rgba(27, 31, 36, 0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      padding: 32px;
+    }
+
+    /* Popup card container */
+    #popup-card {
+      position: relative;
+      width: 90vw;
+      max-width: 960px;
+      height: 80vh;
+      max-height: 700px;
+      background: #ffffff;
+      border-radius: 12px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(0, 0, 0, 0.06);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: popIn 0.25s ease-out;
+    }
+
+    @keyframes popIn {
+      0%   { opacity: 0; transform: scale(0.95) translateY(10px); }
+      100% { opacity: 1; transform: scale(1) translateY(0); }
+    }
+
+    /* Title bar */
+    #title-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid #d1d9e0;
+      background: #f6f8fa;
+      border-radius: 12px 12px 0 0;
+      flex-shrink: 0;
+    }
+    #title-bar h1 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #1f2328;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #title-bar h1 svg { flex-shrink: 0; }
+    #title-bar-actions { display: flex; gap: 6px; align-items: center; }
+
+    #btn-back {
+      background: none;
+      border: 1px solid #d1d9e0;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      color: #656d76;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    #btn-back:hover { background: #f0f0f0; color: #1f2328; border-color: #1f2328; }
+
+    /* Main content area */
+    #main-content {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      position: relative;
+    }
+
+    /* Graph area */
+    #cy {
+      flex: 1;
+      min-width: 0;
+    }
+
+    /* Tooltip overlay */
+    #tooltip {
+      display: none;
+      position: absolute;
+      background: #1f2328;
+      color: #e6edf3;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      pointer-events: none;
+      z-index: 100;
+      max-width: 320px;
+      line-height: 1.6;
+      white-space: nowrap;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    #tooltip .tip-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #ffffff;
+      margin-bottom: 6px;
+      padding-bottom: 5px;
+      border-bottom: 1px solid rgba(255,255,255,0.12);
+    }
+    #tooltip .tip-row {
+      display: flex;
+      gap: 6px;
+    }
+    #tooltip .tip-label {
+      color: #8b949e;
+      flex-shrink: 0;
+    }
+    #tooltip .tip-value {
+      color: #e6edf3;
+    }
+
+    /* Detail panel — GitHub-style sidebar */
+    #detail-panel {
+      width: 300px;
+      border-left: 1px solid #d1d9e0;
+      background: #ffffff;
+      overflow-y: auto;
+      padding: 0;
+      display: none;
+      flex-shrink: 0;
+    }
+    #detail-panel.open { display: block; }
+
+    /* Header row */
+    #detail-panel .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid #d1d9e0;
+      background: #f6f8fa;
+    }
+    #detail-panel .panel-header h2 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #1f2328;
+      margin: 0;
+      word-break: break-all;
+    }
+    #detail-panel .panel-header .category-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 20px;
+      white-space: nowrap;
+      flex-shrink: 0;
+      letter-spacing: 0.3px;
+      text-transform: capitalize;
+    }
+    .badge-container  { background: #dafbe1; color: #1a7f37; border: 1px solid #a6e9b2; }
+    .badge-datastore  { background: #fff8c5; color: #9a6700; border: 1px solid #f5d97e; }
+    .badge-other      { background: #eef1f5; color: #656d76; border: 1px solid #d1d9e0; }
+
+    /* Field rows */
+    #detail-panel .fields {
+      padding: 0;
+    }
+    #detail-panel .field {
+      display: flex;
+      padding: 10px 16px;
+      border-bottom: 1px solid #f0f0f0;
+      gap: 0;
+      flex-direction: column;
+    }
+    #detail-panel .field:last-child {
+      border-bottom: none;
+    }
+    #detail-panel .field-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #656d76;
+      margin-bottom: 3px;
+    }
+    #detail-panel .field-value {
+      font-size: 13px;
+      color: #1f2328;
+      word-break: break-all;
+    }
+    #detail-panel .field-value a {
+      color: #0969da;
+      text-decoration: none;
+    }
+    #detail-panel .field-value a:hover {
+      text-decoration: underline;
+    }
+    #detail-panel .connections-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    #detail-panel .connections-list li {
+      padding: 4px 0;
+      cursor: pointer;
+      color: #0969da;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+      font-size: 13px;
+    }
+    #detail-panel .connections-list li:hover {
+      text-decoration: underline;
+    }
+
+    /* Close button */
+    #close-panel {
+      background: none;
+      border: none;
+      font-size: 18px;
+      cursor: pointer;
+      color: #656d76;
+      padding: 0 4px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    #close-panel:hover { color: #1f2328; }
+
+    /* Toolbar */
+    #toolbar {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 50;
+      display: flex;
+      gap: 6px;
+    }
+    #toolbar button {
+      background: #ffffff;
+      border: 1px solid #d1d9e0;
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      color: #1f2328;
+    }
+    #toolbar button:hover {
+      background: #f6f8fa;
+      border-color: #1f2328;
+    }
+
+    /* Responsive: smaller screens */
+    @media (max-width: 700px) {
+      body { padding: 12px; }
+      #popup-card {
+        width: 100vw;
+        height: 95vh;
+        max-width: none;
+        max-height: none;
+        border-radius: 10px;
+      }
+      #detail-panel { width: 100%; border-left: none; border-top: 1px solid #d1d9e0; }
+      #main-content { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <div id="popup-card">
+    <!-- Title bar -->
+    <div id="title-bar">
+      <h1>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="#656d76"><path d="M8.5 1.5a.5.5 0 0 0-1 0v5.793L5.354 5.146a.5.5 0 1 0-.708.708l3 3a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 7.293V1.5ZM1 10a1 1 0 0 1 1-1h3.5a.5.5 0 0 1 0 1H2.5v3.5h11V10h-3a.5.5 0 0 1 0-1H13a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-4Z"/></svg>
+        Architecture Explorer
+      </h1>
+      <div id="title-bar-actions">
+        <button id="btn-fit" title="Fit all nodes in view">Fit</button>
+        <a id="btn-back" href="https://github.com/nithyatsu/prototype3" title="Back to repo">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M7.78 12.53a.75.75 0 0 1-1.06 0L2.47 8.28a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 1.06L4.81 7h7.44a.75.75 0 0 1 0 1.5H4.81l2.97 2.97a.75.75 0 0 1 0 1.06Z"/></svg>
+          Repo
+        </a>
+      </div>
+    </div>
+    <!-- Main content -->
+    <div id="main-content">
+      <div id="cy"></div>
+      <div id="tooltip"></div>
+      <div id="detail-panel">
+        <div class="panel-header">
+          <h2 id="panel-title"></h2>
+          <span id="panel-badge" class="category-badge"></span>
+          <button id="close-panel">&times;</button>
+        </div>
+        <div id="detail-content" class="fields"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (async function () {
+      // Load graph data
+      const resp = await fetch('graph-data.json');
+      if (!resp.ok) {
+        document.getElementById('cy').innerHTML =
+          '<p style="padding:40px;color:#cf222e;">Failed to load graph-data.json</p>';
+        return;
+      }
+      const graphData = await resp.json();
+      const elements = graphData.elements;
+
+      // Map node id -> data for quick lookup
+      const nodeMap = {};
+      elements.nodes.forEach(n => { nodeMap[n.data.id] = n.data; });
+
+      // Category -> border color
+      function borderColor(cat) {
+        if (cat === 'container') return '#2da44e';
+        if (cat === 'datastore') return '#d4a72c';
+        return '#d1d9e0';
+      }
+
+      // Init Cytoscape
+      const cy = cytoscape({
+        container: document.getElementById('cy'),
+        elements: elements,
+        style: [
+          {
+            selector: 'node',
+            style: {
+              'label': 'data(label)',
+              'text-valign': 'center',
+              'text-halign': 'center',
+              'font-size': '13px',
+              'font-weight': '600',
+              'font-family': '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif',
+              'color': '#1f2328',
+              'background-color': '#ffffff',
+              'border-width': 1.5,
+              'border-color': function (ele) { return borderColor(ele.data('category')); },
+              'shape': 'roundrectangle',
+              'width': 140,
+              'height': 50,
+              'text-wrap': 'ellipsis',
+              'text-max-width': '120px',
+            }
+          },
+          {
+            selector: 'node:selected',
+            style: {
+              'border-width': 2.5,
+              'border-color': '#0969da',
+              'background-color': '#ddf4ff',
+            }
+          },
+          {
+            selector: 'edge',
+            style: {
+              'width': 1.5,
+              'line-color': '#2da44e',
+              'target-arrow-color': '#2da44e',
+              'target-arrow-shape': 'triangle',
+              'curve-style': 'bezier',
+            }
+          }
+        ],
+        layout: {
+          name: 'dagre',
+          rankDir: 'LR',
+          nodeSep: 40,
+          rankSep: 80,
+          padding: 30,
+        },
+        minZoom: 0.3,
+        maxZoom: 3,
+      });
+
+      // ── Tooltip ──
+      const tooltip = document.getElementById('tooltip');
+
+      cy.on('mouseover', 'node', function (evt) {
+        const d = evt.target.data();
+        let html = '<div class="tip-name">' + escHtml(d.label) + '</div>';
+        function tipRow(label, value) {
+          return '<div class="tip-row"><span class="tip-label">' + label + '</span><span class="tip-value">' + escHtml(value) + '</span></div>';
+        }
+        if (d.image) {
+          html += tipRow('image:', d.image + ':' + (d.tag || 'latest'));
+        } else {
+          html += tipRow('type:', d.type);
+        }
+        if (d.commitHash) {
+          html += tipRow('commit:', d.commitHash);
+        }
+        if (d.commitAuthor) {
+          html += tipRow('author:', d.commitAuthor);
+        }
+        tooltip.innerHTML = html;
+        tooltip.style.display = 'block';
+      });
+
+      cy.on('mousemove', 'node', function (evt) {
+        const pos = evt.renderedPosition || evt.position;
+        tooltip.style.left = (pos.x + 15) + 'px';
+        tooltip.style.top = (pos.y - 10) + 'px';
+      });
+
+      cy.on('mouseout', 'node', function () {
+        tooltip.style.display = 'none';
+      });
+
+      // ── Detail panel ──
+      const panel = document.getElementById('detail-panel');
+      const content = document.getElementById('detail-content');
+
+      function showDetail(nodeId) {
+        const d = nodeMap[nodeId];
+        if (!d) return;
+
+        // Header
+        document.getElementById('panel-title').textContent = d.label;
+        const badge = document.getElementById('panel-badge');
+        badge.textContent = d.category;
+        badge.className = 'category-badge badge-' + (d.category || 'other');
+
+        // Fields
+        let html = '';
+        html += field('Resource type', escHtml(d.type));
+
+        if (d.image) {
+          html += field('Image', escHtml(d.image + ':' + (d.tag || 'latest')));
+        }
+
+        if (d.commitHash) {
+          html += field('Last commit', escHtml(d.commitHash) + (d.commitAuthor ? '  &mdash; ' + escHtml(d.commitAuthor) : ''));
+        }
+
+        if (d.connections && d.connections.length) {
+          let items = d.connections.map(c =>
+            '<li data-node="' + escAttr(c) + '">→ ' + escHtml(nodeMap[c] ? nodeMap[c].label : c) + '</li>'
+          ).join('');
+          html += field('Connections', '<ul class="connections-list">' + items + '</ul>');
+        }
+
+        content.innerHTML = html;
+        panel.classList.add('open');
+
+        // Highlight node
+        cy.nodes().unselect();
+        const node = cy.getElementById(nodeId);
+        if (node.length) {
+          node.select();
+          cy.animate({ center: { eles: node }, duration: 300 });
+        }
+      }
+
+      function field(label, value) {
+        return '<div class="field"><div class="field-label">' + label + '</div>' +
+               '<div class="field-value">' + value + '</div></div>';
+      }
+
+      function escHtml(s) {
+        const el = document.createElement('span');
+        el.textContent = s;
+        return el.innerHTML;
+      }
+      function escAttr(s) {
+        return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+      }
+
+      cy.on('tap', 'node', function (evt) {
+        showDetail(evt.target.id());
+      });
+
+      // Close panel
+      document.getElementById('close-panel').addEventListener('click', function () {
+        panel.classList.remove('open');
+        cy.nodes().unselect();
+      });
+
+      // Click on connection -> navigate to that node
+      content.addEventListener('click', function (evt) {
+        const li = evt.target.closest('[data-node]');
+        if (li) showDetail(li.dataset.node);
+      });
+
+      // ── Fit button ──
+      document.getElementById('btn-fit').addEventListener('click', function () {
+        cy.fit(undefined, 30);
+      });
+
+      // ── Auto-focus from ?node= query param ──
+      const params = new URLSearchParams(window.location.search);
+      const focusNode = params.get('node');
+      if (focusNode) {
+        // Try matching by label (display name) first, then by id
+        let target = cy.nodes().filter(n => n.data('label') === focusNode);
+        if (!target.length) target = cy.getElementById(focusNode);
+        if (target.length) {
+          setTimeout(() => showDetail(target.id()), 400);
+        }
+      }
+    })();
+  </script>
+</body>
+</html>

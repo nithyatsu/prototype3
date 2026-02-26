@@ -3,8 +3,9 @@
 # ---------------------------------------------------------------
 # Spins up a Kind cluster, installs Radius with custom images,
 # runs `rad app graph` to extract resources & connections from
-# app.bicep, generates a Mermaid diagram with GitHub styling,
-# and updates README.md with the interactive graph.
+# app.bicep, generates an SVG diagram + JSON data for the
+# interactive Cytoscape.js explorer, updates README.md, and
+# deploys the interactive explorer to GitHub Pages.
 #
 # Trigger: Push to main, every 2 hours, or manual dispatch
 # Based on: workflow-spec.md
@@ -20,6 +21,7 @@ on:
     paths:
       - 'app.bicep'
       - 'scripts/**'
+      - '.github/pages/**'
       - '.github/workflows/generate-architecture.yml'
   schedule:
     # Every 2 hours
@@ -34,6 +36,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 env:
   RADIUS_CONTAINER_REGISTRY: ghcr.io/nithyatsu
@@ -201,14 +205,14 @@ jobs:
           cat "${{ github.workspace }}/.radius/app-graph.json"
 
       # -------------------------------------------------------
-      # Steps 4-5: Build Mermaid graph & update README
+      # Steps 4-6: Generate SVG + JSON + update README
       # -------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Generate Mermaid diagram and update README
+      - name: Generate architecture diagram and update README
         env:
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
@@ -225,13 +229,40 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add README.md .radius/app-graph.json
+          git add README.md .radius/app-graph.json graph.svg
           # Only commit if there are changes
           if git diff --staged --quiet; then
             echo "No diagram changes — nothing to commit."
           else
             git commit -m "docs: update architecture diagram [automated]"
-            # Pull latest main (rebase) in case it advanced while we ran
-            git pull --rebase origin main
+            # Pull latest main (rebase) in case it advanced while we ran.
+            # Use -X theirs to auto-resolve conflicts by keeping our (rebased)
+            # freshly-generated files, since they are always the correct version.
+            git pull --rebase -X theirs origin main
             git push
           fi
+
+      # Assemble Pages deploy directory from template + generated files
+      - name: Assemble Pages site
+        run: |
+          mkdir -p _site
+          cp .github/pages/index.html _site/
+          cp docs/graph-data.json     _site/
+          cp docs/graph.svg           _site/
+
+      # -------------------------------------------------------
+      # Step 8: Deploy interactive explorer to GitHub Pages
+      # -------------------------------------------------------
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

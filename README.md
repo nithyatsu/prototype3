@@ -89,6 +89,21 @@ A simple **Frontend → Backend → Database** application built with [Radius](h
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 > *Auto-generated from `app.bicep` — click any node to jump to its definition in the source.*
 
 ```mermaid
@@ -100,10 +115,12 @@ graph LR
     backend["<b>backend</b>"]:::container
     frontend["<b>frontend</b>"]:::container
     frontend --> backend
-    click backend href "https://github.com/nithyatsu/prototype-enhanced/blob/main/app.bicep#L50" "app.bicep:50" _blank
-    click frontend href "https://github.com/nithyatsu/prototype-enhanced/blob/main/app.bicep#L23" "app.bicep:23" _blank
+    click backend href "https://github.com/nithyatsu/prototype3/blob/main/app.bicep#L50" "app.bicep:50" _blank
+    click frontend href "https://github.com/nithyatsu/prototype3/blob/main/app.bicep#L23" "app.bicep:23" _blank
     linkStyle 0 stroke:#2da44e,stroke-width:1.5px
 ```
+
+[Interactive Graph →](https://nithyatsu.github.io/prototype3/)
 
 
 ## Prerequisites

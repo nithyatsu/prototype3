@@ -1,1 +1,5 @@
 __pycache__/
+
+# Generated Pages assets (deployed via workflow artifact, not committed)
+docs/
+_site/
