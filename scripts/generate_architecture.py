@@ -585,13 +585,6 @@ def generate_graph_json(resources, connections, repo_owner, repo_name, branch, b
             "nodes": nodes,
             "edges": edges,
         },
-        "metadata": {
-            "repoOwner": repo_owner,
-            "repoName": repo_name,
-            "branch": branch,
-            "bicepFile": bicep_file,
-            "detailed": detailed,
-        },
     }
 
 
