@@ -7,7 +7,7 @@
 # interactive Cytoscape.js explorer, updates README.md, and
 # deploys the interactive explorer to GitHub Pages.
 #
-# Trigger: Push to main, every 2 hours, or manual dispatch
+# Trigger: Push to main or manual dispatch
 # Based on: workflow-spec.md
 # ---------------------------------------------------------------
 
@@ -23,9 +23,6 @@ on:
       - 'scripts/**'
       - '.github/pages/**'
       - '.github/workflows/generate-architecture.yml'
-  schedule:
-    # Every 2 hours
-    - cron: "0 */2 * * *"
   workflow_dispatch:
     inputs:
       detailed:
@@ -218,7 +215,7 @@ jobs:
           REPO_NAME: ${{ github.event.repository.name }}
           REPO_BRANCH: ${{ github.ref_name }}
           RAD_GRAPH_OUTPUT: ${{ github.workspace }}/.radius/app-graph.json
-          DETAILED: ${{ inputs.detailed || 'false' }}
+          DETAILED: ${{ 'false' }}
           BICEP_FILE: ${{ github.workspace }}/app.bicep
         run: python scripts/generate_architecture.py
 
