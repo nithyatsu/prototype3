@@ -47,21 +47,12 @@ Parse the output from step 4 and construct a renderable graph. Extract:
 - **Nodes** — each resource (name, type, source file, line number)
 - **Edges** — connections between resources
 
-### 6. Render the graph — Mermaid + SVG + Interactive explorer
+### 6. Render the graph — Mermaid + Interactive explorer
 
-The architecture visualization uses a **three-tier approach**:
+The architecture visualization uses a **two-tier approach**:
 
 1. **README Mermaid diagram** — A Mermaid `graph LR` diagram embedded directly in `README.md`. GitHub renders Mermaid natively. Mermaid `click ... href` directives create **working clickable nodes** that open the resource definition in `app.bicep` on GitHub. A footer link leads to the interactive explorer.
-2. **SVG overview** — A static SVG generated for the GitHub Pages explorer and for direct viewing in the repo (`graph.svg`). SVG nodes have `<title>` tooltips (image:tag) and `<a href>` links to source definitions. Includes a footer link to the interactive explorer.
-3. **GitHub Pages interactive explorer** — A fully interactive Cytoscape.js web page with click-to-expand detail panels, zoom, pan, and drill-down.
-
-#### Why Mermaid for README (not SVG)
-
-GitHub renders SVGs referenced in Markdown as `<img>` tags. This preserves the **Markdown image-title tooltip** — e.g. `![Architecture](graph.svg "working")` shows `"working"` on hover over the whole image — but **strips per-node interactivity** inside the SVG (`<title>` tooltips per element, `<a href>` links, and click handlers do not fire). Mermaid `click ... href` directives **do** create working hyperlinks when GitHub renders the diagram, giving us **per-node click-to-source** in the README.
-
-The SVG is still generated for:
-- The GitHub Pages explorer (displayed alongside the graph data)
-- Direct viewing when navigating to `graph.svg` in the repo (where per-node `<title>` and `<a>` do work)
+2. **GitHub Pages interactive explorer** — A fully interactive Cytoscape.js web page with click-to-expand detail panels, zoom, pan, and drill-down.
 
 #### Deployment model
 
@@ -73,17 +64,14 @@ Generated assets are **not committed** to the repo — they are assembled at run
 
 # Generated at CI runtime (never committed, .gitignore'd):
 docs/
-├── graph-data.json     ← Auto-generated JSON for Cytoscape.js explorer
-└── graph.svg           ← Auto-generated SVG overview
+└── graph-data.json     ← Auto-generated JSON for Cytoscape.js explorer
 
 _site/                  ← Assembled deploy directory (CI only)
 ├── index.html          ← Copied from .github/pages/
-├── graph-data.json     ← Copied from docs/
-└── graph.svg           ← Copied from docs/
+└── graph-data.json     ← Copied from docs/
 ```
 
-- The CI workflow generates `docs/graph-data.json` and `docs/graph.svg` from the `rad app graph` output.
-- `graph.svg` is also committed to the repo root so the README can reference it.
+- The CI workflow generates `docs/graph-data.json` from the `rad app graph` output.
 - A `_site/` directory is assembled from `.github/pages/index.html` + generated files, then uploaded via `actions/upload-pages-artifact`.
 - **GitHub Pages** is enabled via `actions/configure-pages@v5` with `enablement: true` and deployed via `actions/deploy-pages@v4`.
 - `docs/` and `_site/` are in `.gitignore` — users of the repo never see generated artifacts.
@@ -99,13 +87,13 @@ Use **[Cytoscape.js](https://js.cytoscape.org/)** for the GitHub Pages interacti
 
 #### Visual style
 
-The same visual style applies to both the Mermaid diagram, SVG overview, and the Cytoscape.js explorer:
+The same visual style applies to both the Mermaid diagram and the Cytoscape.js explorer:
 
 | Property        | Value                                          |
 |-----------------|-------------------------------------------------|
 | Background      | White (`#ffffff`)                               |
 | Font color      | Dark (`#1f2328`)                               |
-| Node shape      | Rounded-corner rectangles (`rx:6, ry:6` in classDef/SVG; `shape: 'roundrectangle'` in Cytoscape) |
+| Node shape      | Rounded-corner rectangles (`rx:6, ry:6` in classDef; `shape: 'roundrectangle'` in Cytoscape) |
 | Container border| Green (`#2da44e`)                               |
 | Datastore border| Amber (`#d4a72c`)                               |
 | Node fill       | White (`#ffffff`)                               |
@@ -124,13 +112,6 @@ click frontend href "https://github.com/<owner>/<repo>/blob/<branch>/app.bicep#L
 |----------------------|-------------------------------------------------|
 | **Click node**       | Opens the **source file definition on GitHub** at the resource's line number (`app.bicep#L<N>`). This works because GitHub preserves Mermaid `click href` directives as real hyperlinks. |
 | **Footer link**      | Below the diagram, an **"Interactive Graph →"** link opens the GitHub Pages explorer for full interactivity. |
-
-#### SVG overview — Interactivity (direct file viewing)
-
-When viewing `graph.svg` directly in the repo (not via README), individual nodes have:
-- `<title>` tooltips showing **image:tag** for containers (or resource type for others)
-- `<a href>` links to the **source file definition** on GitHub (`app.bicep#L<N>`)
-- A footer link labeled **"Interactive Graph →"** that opens the GitHub Pages explorer
 
 #### GitHub Pages Explorer — Interactivity
 
@@ -188,7 +169,6 @@ The workflow must ensure GitHub Pages is enabled. Use the official GitHub Pages 
     mkdir -p _site
     cp .github/pages/index.html _site/
     cp docs/graph-data.json     _site/
-    cp docs/graph.svg           _site/
 
 - uses: actions/configure-pages@v5
   with:
@@ -245,7 +225,7 @@ In detailed mode, the resulting diagram effectively becomes an **image dependenc
 
 ### 8. Commit and push
 
-Auto-commit changes to `README.md`, `graph.svg`, and `.radius/app-graph.json` only if the graph has changed. Generated Pages assets (`docs/`, `_site/`) are **not committed** — they are deployed directly as a workflow artifact.
+Auto-commit changes to `README.md` and `.radius/app-graph.json` only if the graph has changed. Generated Pages assets (`docs/`, `_site/`) are **not committed** — they are deployed directly as a workflow artifact.
 
 Then assemble `_site/` from `.github/pages/index.html` + generated files and deploy to GitHub Pages.
 

@@ -10,15 +10,12 @@ Two modes of operation:
      Used locally or when `rad app graph` is not yet available.
 
 Outputs:
-  - graph.svg          — static SVG overview (repo root + docs/) with <title>
-                         tooltips and <a href> links to the interactive explorer
   - docs/graph-data.json — JSON data for the Cytoscape.js interactive explorer
-  - README.md          — updated Architecture section with clickable SVG image
-                         that links to the GitHub Pages interactive explorer
+  - README.md          — updated Architecture section with Mermaid diagram
+                         and link to the GitHub Pages interactive explorer
 """
 
 import json
-import math
 import re
 import os
 import subprocess
@@ -523,197 +520,6 @@ def generate_mermaid(resources, connections, repo_owner, repo_name, branch, bice
     return "\n".join(lines)
 
 
-# ── SVG generation ────────────────────────────────────────────────
-
-# Layout constants
-SVG_NODE_WIDTH = 160
-SVG_NODE_HEIGHT = 50
-SVG_NODE_HEIGHT_DETAILED = 70
-SVG_H_GAP = 80
-SVG_V_GAP = 40
-SVG_PADDING = 30
-SVG_FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif"
-
-
-def _escape_xml(text: str) -> str:
-    """Escape text for safe inclusion in XML/SVG."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").replace("'", "&apos;")
-
-
-def _layout_nodes(resources, detailed=False):
-    """Simple left-to-right layout: group by category column order.
-
-    Returns dict: symbolic_name -> (x, y, w, h)
-    """
-    node_h = SVG_NODE_HEIGHT_DETAILED if detailed else SVG_NODE_HEIGHT
-
-    # Order: containers first, then datastores, then others
-    columns: dict[str, list] = {"container": [], "datastore": [], "other": []}
-    for r in resources:
-        if r["category"] == "application":
-            continue
-        cat = r["category"] if r["category"] in columns else "other"
-        columns[cat].append(r)
-
-    positions = {}
-    x_offset = SVG_PADDING
-    for col_key in ("container", "datastore", "other"):
-        col = columns[col_key]
-        if not col:
-            continue
-        y_offset = SVG_PADDING
-        for r in col:
-            positions[r["symbolic_name"]] = (x_offset, y_offset, SVG_NODE_WIDTH, node_h)
-            y_offset += node_h + SVG_V_GAP
-        x_offset += SVG_NODE_WIDTH + SVG_H_GAP
-
-    return positions
-
-
-def _build_edge_path(x1, y1, w1, h1, x2, y2, w2, h2):
-    """Build an SVG path for an edge between two node boxes."""
-    # Source: right center of node 1
-    sx = x1 + w1
-    sy = y1 + h1 / 2
-    # Target: left center of node 2
-    tx = x2
-    ty = y2 + h2 / 2
-
-    # If target is to the left of source, go from bottom to top instead
-    if tx <= sx:
-        sx = x1 + w1 / 2
-        sy = y1 + h1
-        tx = x2 + w2 / 2
-        ty = y2
-
-    # Simple bezier curve
-    mx = (sx + tx) / 2
-    return f"M {sx},{sy} C {mx},{sy} {mx},{ty} {tx},{ty}"
-
-
-def generate_svg(resources, connections, repo_owner, repo_name, branch, bicep_file,
-                 detailed=False, bicep_path=None):
-    """Generate an SVG string with tooltips and clickable nodes."""
-    positions = _layout_nodes(resources, detailed)
-    resource_map = {r["symbolic_name"]: r for r in resources}
-    pages_url = get_pages_url(repo_owner, repo_name)
-    node_h = SVG_NODE_HEIGHT_DETAILED if detailed else SVG_NODE_HEIGHT
-
-    # Calculate SVG dimensions (extra 30px at bottom for footer link)
-    footer_height = 30
-    if not positions:
-        svg_w, svg_h = 200, 100 + footer_height
-    else:
-        max_x = max(x + w for x, y, w, h in positions.values()) + SVG_PADDING
-        max_y = max(y + h for x, y, w, h in positions.values()) + SVG_PADDING
-        svg_w = int(max_x)
-        svg_h = int(max_y) + footer_height
-
-    parts = []
-    parts.append(f'<svg xmlns="http://www.w3.org/2000/svg" '
-                 f'xmlns:xlink="http://www.w3.org/1999/xlink" '
-                 f'width="{svg_w}" height="{svg_h}" '
-                 f'viewBox="0 0 {svg_w} {svg_h}">')
-
-    # Defs: arrowhead marker
-    parts.append('  <defs>')
-    parts.append('    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" '
-                 'markerWidth="6" markerHeight="6" orient="auto-start-reverse">')
-    parts.append('      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2da44e" />')
-    parts.append('    </marker>')
-    parts.append('  </defs>')
-
-    # Background
-    parts.append(f'  <rect width="{svg_w}" height="{svg_h}" fill="#ffffff" />')
-
-    # Edges
-    for conn in connections:
-        fr = conn["from"]
-        to = conn["to"]
-        if fr not in positions or to not in positions:
-            continue
-        if resource_map.get(fr, {}).get("category") == "application":
-            continue
-        if resource_map.get(to, {}).get("category") == "application":
-            continue
-        x1, y1, w1, h1 = positions[fr]
-        x2, y2, w2, h2 = positions[to]
-        path_d = _build_edge_path(x1, y1, w1, h1, x2, y2, w2, h2)
-        parts.append(f'  <path d="{path_d}" fill="none" stroke="#2da44e" '
-                     f'stroke-width="1.5" marker-end="url(#arrow)" />')
-
-    # Nodes
-    for res in resources:
-        if res["category"] == "application":
-            continue
-        if res["symbolic_name"] not in positions:
-            continue
-
-        x, y, w, h = positions[res["symbolic_name"]]
-        name = res["display_name"]
-        res_type = res["resource_type"]
-        res_file = res.get("source_file") or bicep_file
-        line = res["line_number"]
-
-        # Border color by category
-        stroke = "#2da44e" if res["category"] == "container" else (
-            "#d4a72c" if res["category"] == "datastore" else "#d1d9e0")
-
-        # Always resolve image:tag for tooltip (not just detailed mode)
-        img_result = resolve_image_tag(res, bicep_path)
-
-        # Tooltip: show image:tag on hover (falls back to type if no image)
-        if img_result:
-            image, tag = img_result
-            tooltip = f"{name} — {image}:{tag}"
-        else:
-            tooltip = f"{name} — {res_type}"
-
-        # Link to source file definition on GitHub
-        source_url = get_github_file_url(repo_owner, repo_name, branch, res_file, line)
-        href = source_url
-
-        parts.append(f'  <a href="{_escape_xml(href)}" target="_blank">')
-        parts.append(f'    <rect x="{x}" y="{y}" width="{w}" height="{h}" '
-                     f'rx="6" ry="6" fill="#ffffff" stroke="{stroke}" stroke-width="1.5" />')
-
-        if detailed:
-            # Resource name — primary label
-            parts.append(f'    <text x="{x + w / 2}" y="{y + 22}" text-anchor="middle" '
-                         f'fill="#1f2328" font-size="13" font-weight="600" '
-                         f'font-family="{SVG_FONT}">{_escape_xml(name)}</text>')
-            if img_result:
-                img_label = f"{image}:{tag}"
-                # Truncate long image strings
-                if len(img_label) > 28:
-                    img_label = img_label[:25] + "..."
-                parts.append(f'    <text x="{x + w / 2}" y="{y + 42}" text-anchor="middle" '
-                             f'fill="#656d76" font-size="10" '
-                             f'font-family="{SVG_FONT}">{_escape_xml(img_label)}</text>')
-        else:
-            # Standard label — centered in box
-            parts.append(f'    <text x="{x + w / 2}" y="{y + h / 2 + 5}" text-anchor="middle" '
-                         f'fill="#1f2328" font-size="13" font-weight="600" '
-                         f'font-family="{SVG_FONT}">{_escape_xml(name)}</text>')
-
-        parts.append(f'    <title>{_escape_xml(tooltip)}</title>')
-        parts.append('  </a>')
-
-    # Footer: "Interactive Graph →" link to GitHub Pages explorer
-    footer_y = svg_h - 10
-    footer_x = svg_w / 2
-    parts.append(f'  <a href="{_escape_xml(pages_url)}" target="_blank">')
-    parts.append(f'    <text x="{footer_x}" y="{footer_y}" text-anchor="middle" '
-                 f'fill="#0969da" font-size="12" '
-                 f'font-family="{SVG_FONT}" text-decoration="underline" '
-                 f'style="cursor:pointer">'
-                 f'Interactive Graph \u2192</text>')
-    parts.append('  </a>')
-
-    parts.append('</svg>')
-    return "\n".join(parts)
-
-
 # ── JSON data export ──────────────────────────────────────────────
 
 def generate_graph_json(resources, connections, repo_owner, repo_name, branch, bicep_file,
@@ -883,26 +689,7 @@ def main():
         bicep_path=bicep_path,
     )
 
-    # --- Generate SVG ---
-    print("\nGenerating SVG diagram...")
-    svg_content = generate_svg(
-        resources, connections,
-        repo_owner, repo_name, branch, bicep_file,
-        detailed=detailed,
-        bicep_path=bicep_path,
-    )
-
-    # Write SVG to repo root (for README) and docs/ (for Pages)
-    svg_root_path = os.path.join(repo_root, "graph.svg")
-    with open(svg_root_path, "w") as f:
-        f.write(svg_content)
-    print(f"SVG written to {svg_root_path}")
-
     os.makedirs(docs_dir, exist_ok=True)
-    svg_docs_path = os.path.join(docs_dir, "graph.svg")
-    with open(svg_docs_path, "w") as f:
-        f.write(svg_content)
-    print(f"SVG written to {svg_docs_path}")
 
     # --- Generate JSON for Cytoscape.js explorer ---
     print("\nGenerating JSON data for interactive explorer...")
