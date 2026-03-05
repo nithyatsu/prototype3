@@ -64,13 +64,14 @@ resource backend 'Applications.Core/containers@2023-10-01-preview' = {
         kind: 'httpGet'
         containerPort: port
         path: '/healthz'
-      }}
-      // connections: {
-      // database: {
-      //   source: database.id
-      //
-      // }
-    //}
+      }
+    }
+      connections: {
+      database: {
+        source: database.id
+      
+      }
+    }
     }
   }
 
@@ -149,10 +150,11 @@ resource backend 'Applications.Core/containers@2023-10-01-preview' = {
 //   }
 // }
 
-// Database - Redis used as a simple data store
-// resource database 'Applications.Datastores/redisCaches@2023-10-01-preview' = {
-//   name: 'database'
-//   properties: {
-//     application: app.id
-//     environment: environment
-//   }
+//Database - Redis used as a simple data store
+resource database 'Applications.Datastores/redisCaches@2023-10-01-preview' = {
+  name: 'database'
+  properties: {
+    application: app.id
+    environment: environment
+  }
+}
