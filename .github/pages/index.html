@@ -130,6 +130,13 @@
     #tooltip .tip-value {
       color: #e6edf3;
     }
+    #tooltip .tip-alert {
+      margin-top: 8px;
+      padding-top: 6px;
+      border-top: 1px solid rgba(255,255,255,0.12);
+      color: #f0a029;
+      font-weight: 600;
+    }
 
     /* Detail panel — GitHub-style sidebar */
     #detail-panel {
@@ -353,6 +360,14 @@
             }
           },
           {
+            selector: 'node[?hasUpdate]',
+            style: {
+              'border-color': '#d97706',
+              'border-width': 2,
+              'label': function(ele) { return ele.data('label') + ' \u26a0'; },
+            }
+          },
+          {
             selector: 'node:selected',
             style: {
               'border-width': 2.5,
@@ -401,6 +416,9 @@
         }
         if (d.commitAuthor) {
           html += tipRow('author:', d.commitAuthor);
+        }
+        if (d.hasUpdate) {
+          html += '<div class="tip-alert">\u26a0 Newer image version available \u2014 repo has updates</div>';
         }
         tooltip.innerHTML = html;
         tooltip.style.display = 'block';
