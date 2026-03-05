@@ -528,6 +528,7 @@ def generate_graph_json(resources, connections, repo_owner, repo_name, branch, b
     nodes = []
     edges = []
     resource_map = {r["symbolic_name"]: r for r in resources}
+    first_container_marked = False
 
     for res in resources:
         if res["category"] == "application":
@@ -554,6 +555,11 @@ def generate_graph_json(resources, connections, repo_owner, repo_name, branch, b
             node_data["commitHash"] = blame["hash"]
         if blame.get("author"):
             node_data["commitAuthor"] = blame["author"]
+
+        # Mark the first container node to indicate a potentially stale image
+        if res["category"] == "container" and not first_container_marked:
+            node_data["hasUpdate"] = True
+            first_container_marked = True
 
         # Gather connections for this node
         outbound = [c["to"] for c in connections
